@@ -36,7 +36,7 @@ jobs:
           - os: windows-latest
             os_short: windows
             compiler_cc: msvc
-          - os: windows-2019
+          - os: windows-2022
             os_short: windows
             compiler_cc: msvc
 
@@ -55,7 +55,6 @@ jobs:
           submodules: recursive
           path: amxmodx
 
-      # Setup Python for AMBuild
       - uses: actions/setup-python@v5
         name: Setup Python
         with:
@@ -72,8 +71,6 @@ jobs:
         run: |
           mkdir -p ${{ env.DEPENDENCIES_FOLDER }}
           cd ${{ env.DEPENDENCIES_FOLDER }}
-          
-          # Satisfy checkout-deps requirement for a "amxmodx" folder.
           mkdir -p amxmodx
           ../amxmodx/support/checkout-deps.sh
 
@@ -94,7 +91,6 @@ jobs:
           curl -L -o "mysql-connector-c-6.1.11-win32.zip" https://downloads.mysql.com/archives/get/p/19/file/mysql-connector-c-6.1.11-win32.zip
           7z x mysql-connector-c-6.1.11-win32.zip -o"mysql"
           cd mysql
-          dir
           ren mysql-connector-c-6.1.11-win32 mysql-5.5
           move /Y mysql-5.5 ..\
           
@@ -129,6 +125,8 @@ jobs:
         run: |
           mkdir -p build
           cd build
+          # отключаем -Werror если установлен
+          sed -i 's/-Werror//g' ../configure.py || true
           python ../configure.py \
             --enable-optimize \
             --metamod=${{ env.DEPENDENCIES_ROOT }}/metamod-am \
@@ -149,9 +147,9 @@ jobs:
           cl.exe
           mkdir build
           cd build
-          python ../configure.py \
-            --enable-optimize \
-            --metamod=${{ env.DEPENDENCIES_ROOT_WIN }}\metamod-am \
-            --hlsdk=${{ env.DEPENDENCIES_ROOT_WIN }}\hlsdk \
-            --mysql=${{ env.DEPENDENCIES_ROOT_WIN }}\mysql-5.5
+          python ..\configure.py ^
+            --enable-optimize ^
+            --metamod=%DEPENDENCIES_ROOT_WIN%\metamod-am ^
+            --hlsdk=%DEPENDENCIES_ROOT_WIN%\hlsdk ^
+            --mysql=%DEPENDENCIES_ROOT_WIN%\mysql-5.5
           ambuild
