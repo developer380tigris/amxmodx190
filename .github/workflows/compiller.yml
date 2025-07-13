@@ -9,6 +9,7 @@ on:
     branches:
       - master
       - 1.9-dev
+
 jobs:
   test:
     strategy:
@@ -43,13 +44,17 @@ jobs:
             os_short: windows
             compiler_cc: msvc++14.16-vs2017-cl
             python_version: 3.8
-    fail-fast: false
+      fail-fast: false
+
     runs-on: ${{ matrix.os }}
+
     name: ${{ matrix.os_short }}-${{ matrix.os }}-${{ matrix.compiler_cc }}-py${{ matrix.python_version }}
+
     env:
       DEPENDENCIES_FOLDER: dependencies      
       DEPENDENCIES_ROOT: ${{ github.workspace }}/dependencies      
       DEPENDENCIES_ROOT_WIN: ${{ github.workspace }}\dependencies              
+
     steps:
       - uses: actions/checkout@v2
         with:
@@ -62,7 +67,7 @@ jobs:
         with:
           python-version: ${{ matrix.python_version }}
 
-      # Install pip conditionally for Python 3.8 or upgrade for 3.9+
+      # Install or upgrade pip conditionally for Python 3.8 or 3.9+
       - name: Install or upgrade pip based on Python version
         run: |
           if [[ "${{ matrix.python_version }}" == "3.8" ]]; then
