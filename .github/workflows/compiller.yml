@@ -1,4 +1,4 @@
-name: Prepare Dependency Archives
+name: Prepare Ready-To-Build Archives
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ on:
 
 jobs:
   package:
-    name: ${{ matrix.os_short }}-${{ matrix.package_name }}
+    name: ${{ matrix.os_short }}-ready-to-build
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -22,20 +22,19 @@ jobs:
         include:
           - os: ubuntu-22.04
             os_short: linux
-            package_name: dependencies-linux
+            artifact_name: amxmodx-ready-linux
 
           - os: windows-2022
             os_short: windows
-            package_name: dependencies-windows
+            artifact_name: amxmodx-ready-windows
 
     env:
-      DEPENDENCIES_FOLDER: dependencies
-      DEPENDENCIES_ROOT: ${{ github.workspace }}/dependencies
-      DEPENDENCIES_ROOT_WIN: ${{ github.workspace }}\dependencies
-      PACKAGE_ROOT: package_root
+      SRC_DIR: amxmodx
+      DEPS_DIR: dependencies
+      PACKAGE_DIR: package_root
 
     steps:
-      - name: Checkout repository
+      - name: Checkout AMXModX source
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -47,42 +46,21 @@ jobs:
         with:
           python-version: 3.9
 
-      - name: Prepare Linux dependencies
+      - name: Prepare Linux dependency tree
         if: startsWith(runner.os, 'Linux')
         shell: bash
         run: |
           set -euxo pipefail
 
-          mkdir -p "${DEPENDENCIES_FOLDER}"
-          cd "${DEPENDENCIES_FOLDER}"
+          mkdir -p "${DEPS_DIR}"
+          cd "${DEPS_DIR}"
 
-          # checkout-deps.sh требует наличие каталога amxmodx
           mkdir -p amxmodx
           ../amxmodx/support/checkout-deps.sh
 
-      - name: Prepare Windows dependencies
-        if: startsWith(runner.os, 'Windows')
-        shell: cmd
-        run: |
-          if not exist "%DEPENDENCIES_ROOT_WIN%" mkdir "%DEPENDENCIES_ROOT_WIN%"
-
-          if not exist "%DEPENDENCIES_ROOT_WIN%\nasm" mkdir "%DEPENDENCIES_ROOT_WIN%\nasm"
-          curl -L -o "%DEPENDENCIES_ROOT_WIN%\nasm\nasm.zip" https://www.nasm.us/pub/nasm/releasebuilds/2.13.03/win32/nasm-2.13.03-win32.zip
-
-          cd /d "%DEPENDENCIES_ROOT_WIN%\nasm"
-          7z x nasm.zip
-
-          cd /d "%DEPENDENCIES_ROOT_WIN%"
-          git clone https://github.com/alliedmodders/ambuild
-          git clone https://github.com/alliedmodders/metamod-hl1 metamod-am
-          git clone https://github.com/alliedmodders/hlsdk
-
-          curl -L -o "mysql-connector-c-6.1.1-win32.zip" https://downloads.mysql.com/archives/get/p/19/file/mysql-connector-c-6.1.1-win32.zip
-          7z x mysql-connector-c-6.1.1-win32.zip -o"mysql"
-
-          cd /d "%DEPENDENCIES_ROOT_WIN%\mysql"
-          ren mysql-connector-c-6.1.1-win32 mysql-5.5
-          move /Y mysql-5.5 ..\
+          if [ ! -d "ambuild" ]; then
+            git clone https://github.com/alliedmodders/ambuild
+          fi
 
       - name: Build Linux package structure
         if: startsWith(runner.os, 'Linux')
@@ -90,73 +68,188 @@ jobs:
         run: |
           set -euxo pipefail
 
-          rm -rf "${PACKAGE_ROOT}"
-          mkdir -p "${PACKAGE_ROOT}/dependencies"
+          rm -rf "${PACKAGE_DIR}"
+          mkdir -p "${PACKAGE_DIR}"
 
-          cp -R "${DEPENDENCIES_ROOT}/metamod-am" "${PACKAGE_ROOT}/dependencies/"
-          cp -R "${DEPENDENCIES_ROOT}/hlsdk" "${PACKAGE_ROOT}/dependencies/"
-          cp -R "${DEPENDENCIES_ROOT}/mysql-5.5" "${PACKAGE_ROOT}/dependencies/"
+          cp -R "${SRC_DIR}" "${PACKAGE_DIR}/amxmodx"
+          mkdir -p "${PACKAGE_DIR}/dependencies"
 
-          cat > "${PACKAGE_ROOT}/README.txt" << 'EOF'
-          This archive contains prepared dependency folders for Linux.
-          No AMXModX build has been performed.
+          cp -R "${DEPS_DIR}/ambuild" "${PACKAGE_DIR}/dependencies/ambuild"
+          cp -R "${DEPS_DIR}/metamod-am" "${PACKAGE_DIR}/dependencies/metamod-am"
+          cp -R "${DEPS_DIR}/hlsdk" "${PACKAGE_DIR}/dependencies/hlsdk"
+          cp -R "${DEPS_DIR}/mysql-5.5" "${PACKAGE_DIR}/dependencies/mysql-5.5"
+
+          cat > "${PACKAGE_DIR}/build-linux.sh" << 'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+          AMXX_DIR="${ROOT_DIR}/amxmodx"
+          DEPS_DIR="${ROOT_DIR}/dependencies"
+
+          if ! command -v python3 >/dev/null 2>&1; then
+            echo "python3 not found"
+            exit 1
+          fi
+
+          if ! python3 -m pip --version >/dev/null 2>&1; then
+            echo "pip for python3 not found"
+            exit 1
+          fi
+
+          python3 -m pip install --user "${DEPS_DIR}/ambuild"
+
+          mkdir -p "${AMXX_DIR}/build"
+          cd "${AMXX_DIR}/build"
+
+          python3 ../configure.py \
+            --enable-optimize \
+            --metamod="${DEPS_DIR}/metamod-am" \
+            --hlsdk="${DEPS_DIR}/hlsdk" \
+            --mysql="${DEPS_DIR}/mysql-5.5"
+
+          "${HOME}/.local/bin/ambuild" -j"$(nproc)"
+          EOF
+
+          chmod +x "${PACKAGE_DIR}/build-linux.sh"
+
+          cat > "${PACKAGE_DIR}/README.txt" << 'EOF'
+          Ready-to-build Linux package.
+
           Included:
+          - amxmodx source tree
+          - dependencies/ambuild
           - dependencies/metamod-am
           - dependencies/hlsdk
           - dependencies/mysql-5.5
+          - build-linux.sh
+
+          Usage:
+            ./build-linux.sh
+
+          Required on target machine:
+          - python3
+          - pip
+          - compiler toolchain
+          - multilib libc/g++
+          - nasm if required by your toolchain/build target
           EOF
 
-      - name: Archive Linux package
+      - name: Archive Linux ready package
         if: startsWith(runner.os, 'Linux')
         shell: bash
         run: |
           set -euxo pipefail
+          tar -czf "${{ matrix.artifact_name }}.tar.gz" -C "${PACKAGE_DIR}" .
 
-          tar -czf "${{ matrix.package_name }}.tar.gz" -C "${PACKAGE_ROOT}" .
-
-      - name: Upload Linux package artifact
+      - name: Upload Linux artifact
         if: startsWith(runner.os, 'Linux')
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package_name }}-${{ github.sha }}
-          path: ${{ matrix.package_name }}.tar.gz
+          name: ${{ matrix.artifact_name }}-${{ github.sha }}
+          path: ${{ matrix.artifact_name }}.tar.gz
           retention-days: 7
+
+      - name: Prepare Windows dependency tree
+        if: startsWith(runner.os, 'Windows')
+        shell: cmd
+        run: |
+          if not exist "%DEPS_DIR%" mkdir "%DEPS_DIR%"
+
+          cd /d "%DEPS_DIR%"
+
+          if not exist "ambuild" git clone https://github.com/alliedmodders/ambuild
+          if not exist "metamod-am" git clone https://github.com/alliedmodders/metamod-hl1 metamod-am
+          if not exist "hlsdk" git clone https://github.com/alliedmodders/hlsdk
+
+          if not exist "nasm" (
+            mkdir "nasm"
+            curl -L -o "nasm\nasm.zip" https://www.nasm.us/pub/nasm/releasebuilds/2.13.03/win32/nasm-2.13.03-win32.zip
+            cd /d "%CD%\nasm"
+            7z x nasm.zip
+            cd /d "%GITHUB_WORKSPACE%\%DEPS_DIR%"
+          )
+
+          if not exist "mysql-5.5" (
+            curl -L -o "mysql-connector-c-6.1.1-win32.zip" https://downloads.mysql.com/archives/get/p/19/file/mysql-connector-c-6.1.1-win32.zip
+            7z x mysql-connector-c-6.1.1-win32.zip -o"mysql"
+            cd /d "%DEPS_DIR%\mysql"
+            ren mysql-connector-c-6.1.1-win32 mysql-5.5
+            move /Y mysql-5.5 ..\
+            cd /d "%GITHUB_WORKSPACE%\%DEPS_DIR%"
+          )
 
       - name: Build Windows package structure
         if: startsWith(runner.os, 'Windows')
         shell: cmd
         run: |
-          if exist "%PACKAGE_ROOT%" rmdir /s /q "%PACKAGE_ROOT%"
-          mkdir "%PACKAGE_ROOT%"
-          mkdir "%PACKAGE_ROOT%\dependencies"
+          if exist "%PACKAGE_DIR%" rmdir /s /q "%PACKAGE_DIR%"
+          mkdir "%PACKAGE_DIR%"
+          mkdir "%PACKAGE_DIR%\dependencies"
 
-          xcopy "%DEPENDENCIES_ROOT_WIN%\ambuild" "%PACKAGE_ROOT%\dependencies\ambuild" /E /I /Y
-          xcopy "%DEPENDENCIES_ROOT_WIN%\metamod-am" "%PACKAGE_ROOT%\dependencies\metamod-am" /E /I /Y
-          xcopy "%DEPENDENCIES_ROOT_WIN%\hlsdk" "%PACKAGE_ROOT%\dependencies\hlsdk" /E /I /Y
-          xcopy "%DEPENDENCIES_ROOT_WIN%\mysql-5.5" "%PACKAGE_ROOT%\dependencies\mysql-5.5" /E /I /Y
-          xcopy "%DEPENDENCIES_ROOT_WIN%\nasm" "%PACKAGE_ROOT%\dependencies\nasm" /E /I /Y
+          xcopy "%SRC_DIR%" "%PACKAGE_DIR%\amxmodx" /E /I /Y
+          xcopy "%DEPS_DIR%\ambuild" "%PACKAGE_DIR%\dependencies\ambuild" /E /I /Y
+          xcopy "%DEPS_DIR%\metamod-am" "%PACKAGE_DIR%\dependencies\metamod-am" /E /I /Y
+          xcopy "%DEPS_DIR%\hlsdk" "%PACKAGE_DIR%\dependencies\hlsdk" /E /I /Y
+          xcopy "%DEPS_DIR%\mysql-5.5" "%PACKAGE_DIR%\dependencies\mysql-5.5" /E /I /Y
+          xcopy "%DEPS_DIR%\nasm" "%PACKAGE_DIR%\dependencies\nasm" /E /I /Y
 
           (
-            echo This archive contains prepared dependency folders for Windows.
-            echo No AMXModX build has been performed.
+            echo @echo off
+            echo setlocal
+            echo.
+            echo set "ROOT_DIR=%%~dp0"
+            echo set "AMXX_DIR=%%ROOT_DIR%%amxmodx"
+            echo set "DEPS_DIR=%%ROOT_DIR%%dependencies"
+            echo.
+            echo python3 -m pip install "%%DEPS_DIR%%\ambuild"
+            echo if errorlevel 1 exit /b 1
+            echo.
+            echo set "PATH=%%DEPS_DIR%%\nasm;%%PATH%%"
+            echo.
+            echo if not exist "%%AMXX_DIR%%\build" mkdir "%%AMXX_DIR%%\build"
+            echo cd /d "%%AMXX_DIR%%\build"
+            echo.
+            echo python3 ..\configure.py --enable-optimize --metamod="%%DEPS_DIR%%\metamod-am" --hlsdk="%%DEPS_DIR%%\hlsdk" --mysql="%%DEPS_DIR%%\mysql-5.5"
+            echo if errorlevel 1 exit /b 1
+            echo.
+            echo ambuild
+            echo if errorlevel 1 exit /b 1
+            echo.
+            echo endlocal
+          ) > "%PACKAGE_DIR%\build-windows.cmd"
+
+          (
+            echo Ready-to-build Windows package.
+            echo.
             echo Included:
+            echo - amxmodx source tree
             echo - dependencies\ambuild
             echo - dependencies\metamod-am
             echo - dependencies\hlsdk
             echo - dependencies\mysql-5.5
             echo - dependencies\nasm
-          ) > "%PACKAGE_ROOT%\README.txt"
+            echo - build-windows.cmd
+            echo.
+            echo Usage:
+            echo   build-windows.cmd
+            echo.
+            echo Required on target machine:
+            echo - Python 3 with pip
+            echo - MSVC Build Tools or Visual Studio C++ toolchain
+            echo - x86 build environment initialized
+          ) > "%PACKAGE_DIR%\README.txt"
 
-      - name: Archive Windows package
+      - name: Archive Windows ready package
         if: startsWith(runner.os, 'Windows')
         shell: powershell
         run: |
-          Compress-Archive -Path "${env:PACKAGE_ROOT}\*" -DestinationPath "${{ matrix.package_name }}.zip" -Force
+          Compress-Archive -Path "${env:PACKAGE_DIR}\*" -DestinationPath "${{ matrix.artifact_name }}.zip" -Force
 
-      - name: Upload Windows package artifact
+      - name: Upload Windows artifact
         if: startsWith(runner.os, 'Windows')
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.package_name }}-${{ github.sha }}
-          path: ${{ matrix.package_name }}.zip
+          name: ${{ matrix.artifact_name }}-${{ github.sha }}
+          path: ${{ matrix.artifact_name }}.zip
           retention-days: 7
