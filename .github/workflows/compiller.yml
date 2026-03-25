@@ -46,12 +46,28 @@ jobs:
         with:
           submodules: recursive
           path: amxmodx
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Setup Python 3.9
         uses: actions/setup-python@v2
         with:
           python-version: 3.9
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~\AppData\Local\pip\Cache
+          key: pip-${{ runner.os }}-py39
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.DEPENDENCIES_FOLDER }}
+          key: deps-${{ runner.os }}-${{ hashFiles('amxmodx/support/checkout-deps.sh', 'amxmodx/configure.py', '.github/workflows/**') }}
+          restore-keys: |
+            deps-${{ runner.os }}-
 
       - name: Install Python dependencies
         shell: bash
@@ -69,9 +85,10 @@ jobs:
           mkdir -p "${{ env.DEPENDENCIES_FOLDER }}"
           cd "${{ env.DEPENDENCIES_FOLDER }}"
 
-          # checkout-deps.sh expects "amxmodx" directory to exist.
-          mkdir -p amxmodx
-          ../amxmodx/support/checkout-deps.sh
+          if [ ! -d "metamod-am" ] || [ ! -d "hlsdk" ] || [ ! -d "mysql-5.5" ]; then
+            mkdir -p amxmodx
+            ../amxmodx/support/checkout-deps.sh
+          fi
 
       - name: Install Linux system dependencies
         if: startsWith(runner.os, 'Linux')
@@ -100,10 +117,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
           echo "CC=${{ matrix.compiler_cc }}" >> "$GITHUB_ENV"
           echo "CXX=${{ matrix.compiler_cxx }}" >> "$GITHUB_ENV"
-
           ${{ matrix.compiler_cc }} --version
           ${{ matrix.compiler_cxx }} --version
 
@@ -126,7 +141,7 @@ jobs:
             --hlsdk="${{ env.DEPENDENCIES_ROOT }}/hlsdk" \
             --mysql="${{ env.DEPENDENCIES_ROOT }}/mysql-5.5"
 
-          ambuild
+          ambuild -j"$(nproc)"
 
       - name: Upload Linux artifacts
         if: startsWith(runner.os, 'Linux') && always()
@@ -140,24 +155,28 @@ jobs:
         if: startsWith(runner.os, 'Windows')
         shell: cmd
         run: |
-          mkdir "%DEPENDENCIES_ROOT_WIN%\nasm"
-          curl -L -o "%DEPENDENCIES_ROOT_WIN%\nasm\nasm.zip" https://www.nasm.us/pub/nasm/releasebuilds/2.13.03/win32/nasm-2.13.03-win32.zip
+          if not exist "%DEPENDENCIES_ROOT_WIN%" mkdir "%DEPENDENCIES_ROOT_WIN%"
 
-          cd /d "%DEPENDENCIES_ROOT_WIN%\nasm"
-          7z x nasm.zip
+          if not exist "%DEPENDENCIES_ROOT_WIN%\nasm" (
+            mkdir "%DEPENDENCIES_ROOT_WIN%\nasm"
+            curl -L -o "%DEPENDENCIES_ROOT_WIN%\nasm\nasm.zip" https://www.nasm.us/pub/nasm/releasebuilds/2.13.03/win32/nasm-2.13.03-win32.zip
+            cd /d "%DEPENDENCIES_ROOT_WIN%\nasm"
+            7z x nasm.zip
+          )
 
           cd /d "%DEPENDENCIES_ROOT_WIN%"
-          git clone https://github.com/alliedmodders/ambuild
-          git clone https://github.com/alliedmodders/metamod-hl1 metamod-am
-          git clone https://github.com/alliedmodders/hlsdk
 
-          curl -L -o "mysql-connector-c-6.1.1-win32.zip" https://downloads.mysql.com/archives/get/p/19/file/mysql-connector-c-6.1.1-win32.zip
-          7z x mysql-connector-c-6.1.1-win32.zip -o"mysql"
+          if not exist "ambuild" git clone https://github.com/alliedmodders/ambuild
+          if not exist "metamod-am" git clone https://github.com/alliedmodders/metamod-hl1 metamod-am
+          if not exist "hlsdk" git clone https://github.com/alliedmodders/hlsdk
 
-          cd /d "%DEPENDENCIES_ROOT_WIN%\mysql"
-          dir
-          ren mysql-connector-c-6.1.1-win32 mysql-5.5
-          move /Y mysql-5.5 ..\
+          if not exist "mysql-5.5" (
+            curl -L -o "mysql-connector-c-6.1.1-win32.zip" https://downloads.mysql.com/archives/get/p/19/file/mysql-connector-c-6.1.1-win32.zip
+            7z x mysql-connector-c-6.1.1-win32.zip -o"mysql"
+            cd /d "%DEPENDENCIES_ROOT_WIN%\mysql"
+            ren mysql-connector-c-6.1.1-win32 mysql-5.5
+            move /Y mysql-5.5 ..\
+          )
 
           cd /d "%DEPENDENCIES_ROOT_WIN%\ambuild"
           python3 setup.py install
@@ -174,7 +193,7 @@ jobs:
         shell: cmd
         run: |
           cl.exe
-          mkdir build
+          if not exist build mkdir build
           cd build
           python3 ../configure.py --enable-optimize --metamod=%DEPENDENCIES_ROOT_WIN%\metamod-am --hlsdk=%DEPENDENCIES_ROOT_WIN%\hlsdk --mysql=%DEPENDENCIES_ROOT_WIN%\mysql-5.5
           ambuild
